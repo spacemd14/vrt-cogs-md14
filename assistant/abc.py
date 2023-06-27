@@ -3,10 +3,12 @@ from multiprocessing.pool import Pool
 from typing import Dict, Union
 
 import discord
+import tiktoken
 from discord.ext.commands.cog import CogMeta
 from redbot.core.bot import Red
+from transformers.pipelines.question_answering import QuestionAnsweringPipeline
 
-from .models import DB, CustomFunction, GuildSettings
+from .common.models import DB, CustomFunction, GuildSettings
 
 
 class CompositeMetaClass(CogMeta, ABCMeta):
@@ -20,6 +22,9 @@ class MixinMeta(metaclass=ABCMeta):
     db: DB
     re_pool: Pool
     registry: Dict[str, Dict[str, CustomFunction]]
+
+    openai_encoder: tiktoken.core.Encoding
+    local_llm: QuestionAnsweringPipeline
 
     @abstractmethod
     async def get_chat_response(

@@ -5,16 +5,19 @@ from time import perf_counter
 from typing import Callable, Dict, List, Optional, Union
 
 import discord
+import tiktoken
 from discord.ext import tasks
 from redbot.core import Config, commands
 from redbot.core.bot import Red
+from transformers import pipeline
+from transformers.pipelines.question_answering import QuestionAnsweringPipeline
 
 from .abc import CompositeMetaClass
 from .api import API
 from .commands import AssistantCommands
+from .common.models import DB, Embedding, EmbeddingEntryExists, NoAPIKey
 from .common.utils import json_schema_invalid, request_embedding
 from .listener import AssistantListener
-from .models import DB, Embedding, EmbeddingEntryExists, NoAPIKey
 
 log = logging.getLogger("red.vrt.assistant")
 
@@ -38,7 +41,7 @@ class Assistant(
     """
 
     __author__ = "Vertyco#0117"
-    __version__ = "3.6.1"
+    __version__ = "3.7.0"
 
     def format_help_for_context(self, ctx):
         helpcmd = super().format_help_for_context(ctx)
@@ -51,6 +54,9 @@ class Assistant(
         self.config.register_global(db={})
         self.db: DB = DB()
         self.re_pool = Pool()
+
+        self.openai_encoder: tiktoken.core.Encoding = None
+        self.local_llm: QuestionAnsweringPipeline = None
 
         # {cog_name: {function_name: {function_json_schema}}}
         self.registry: Dict[str, Dict[str, dict]] = {}
@@ -77,6 +83,20 @@ class Assistant(
         await asyncio.sleep(10)
         await asyncio.to_thread(self._cleanup)
         self.save_loop.start()
+        await self.init_local_model()
+        log.info("Local model initialized")
+
+    async def init_models(self):
+        def _init():
+            self.openai_encoder = tiktoken.get_encoding("cl100k_base")
+            self.local_llm = pipeline(
+                "question-answering",
+                model=self.db.local_model,
+                low_cpu_mem_usage=self.db.low_mem,
+                use_fast=True,
+            )
+
+        await asyncio.to_thread(_init)
 
     async def save_conf(self):
         if self.saving:

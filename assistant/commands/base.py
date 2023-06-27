@@ -30,7 +30,7 @@ class Base(MixinMeta):
         - Including `--extract` will send the code separately from the reply
         """
         conf = self.db.get_conf(ctx.guild)
-        if not conf.api_key:
+        if not conf.api_key and not self.db.self_hosted:
             return await ctx.send("This command requires an API key from OpenAI to be configured!")
         if not await can_use(ctx.message, conf.blacklist):
             return
@@ -72,7 +72,7 @@ class Base(MixinMeta):
             return (green, blue)
 
         g, b = generate_color(messages, conf.get_user_max_retention(ctx.author))
-        gg, bb = generate_color(conversation.user_token_count(), max_tokens)
+        gg, bb = generate_color(conversation.user_token_count(conf.model), max_tokens)
         # Whatever limit is more severe get that color
         color = discord.Color.from_rgb(255, min(g, gg), min(b, bb))
 
@@ -80,7 +80,7 @@ class Base(MixinMeta):
             description=(
                 f"{ctx.channel.mention}\n"
                 f"`Messages: `{messages}/{conf.get_user_max_retention(ctx.author)}\n"
-                f"`Tokens:   `{conversation.user_token_count()}/{max_tokens}\n"
+                f"`Tokens:   `{conversation.user_token_count(conf.model)}/{max_tokens}\n"
                 f"`Expired:  `{conversation.is_expired(conf, ctx.author)}\n"
                 f"`Model:    `{conf.get_user_model(ctx.author)}"
             ),

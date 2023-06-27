@@ -11,6 +11,7 @@ from rapidfuzz import fuzz
 from redbot.core import commands
 from redbot.core.utils.chat_formatting import box, pagify
 
+from .common.models import DB, CustomFunction, Embedding, GuildSettings
 from .common.utils import (
     code_string_valid,
     embedding_embeds,
@@ -21,7 +22,6 @@ from .common.utils import (
     request_embedding,
     wait_message,
 )
-from .models import DB, CustomFunction, Embedding, GuildSettings
 
 log = logging.getLogger("red.vrt.assistant.views")
 ON_EMOJI = "\N{ON WITH EXCLAMATION MARK WITH LEFT RIGHT ARROW ABOVE}"
@@ -35,7 +35,7 @@ class APIModal(discord.ui.Modal):
         self.field = discord.ui.TextInput(
             label="Enter your OpenAI Key below",
             style=discord.TextStyle.short,
-            required=True,
+            required=False,
         )
         self.add_item(self.field)
 
@@ -140,7 +140,9 @@ class EmbeddingMenu(discord.ui.View):
         return await super().on_timeout()
 
     async def get_pages(self) -> None:
-        self.pages = await asyncio.to_thread(embedding_embeds, self.conf.embeddings, self.place)
+        self.pages = await asyncio.to_thread(
+            embedding_embeds, self.conf.embeddings, self.place, self.conf.model
+        )
         if len(self.pages) > 30 and not self.has_skip:
             self.add_item(self.left10)
             self.add_item(self.right10)
@@ -460,7 +462,7 @@ class CodeMenu(discord.ui.View):
         owner = self.ctx.author.id in self.ctx.bot.owner_ids
         func_dump = {k: v.dict() for k, v in self.db.functions.items()}
         self.pages = await asyncio.to_thread(
-            function_embeds, func_dump, self.registry, owner, self.ctx.bot
+            function_embeds, func_dump, self.registry, owner, self.ctx.bot, self.conf.model
         )
         if len(self.pages) > 30 and not self.has_skip:
             self.add_item(self.left10)

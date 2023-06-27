@@ -8,84 +8,15 @@ from openai.embeddings_utils import cosine_similarity
 from pydantic import BaseModel
 from redbot.core.bot import Red
 
-from .common.utils import compile_function, num_tokens_from_string
+from .utils import compile_function, num_tokens_from_string
 
 log = logging.getLogger("red.vrt.assistant.models")
-
-MODELS = {
-    "gpt-3.5-turbo": 4096,
-    "gpt-3.5-turbo-0613": 4096,
-    "gpt-3.5-turbo-16k": 16384,
-    "gpt-3.5-turbo-16k-0613": 16384,
-    "gpt-4": 8192,
-    "gpt-4-0613": 8192,
-    "gpt-4-32k": 32768,
-    "gpt-4-32k-0613": 32768,
-    "code-davinci-002": 8001,
-    "text-davinci-003": 4097,
-    "text-davinci-002": 4097,
-    "text-curie-001": 2049,
-    "text-babbage-001": 2049,
-    "text-ada-001": 2049,
-}
-CHAT = [
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0613",
-    "gpt-3.5-turbo-16k",
-    "gpt-3.5-turbo-16k-0613",
-    "gpt-4",
-    "gpt-4-0613",
-    "gpt-4-32k",
-    "gpt-4-32k-0613",
-    "code-davinci-002",
-]
-COMPLETION = [
-    "text-davinci-003",
-    "text-davinci-002",
-    "text-curie-001",
-    "text-babbage-001",
-    "text-ada-001",
-]
-READ_EXTENSIONS = [
-    ".txt",
-    ".py",
-    ".json",
-    ".yml",
-    ".yaml",
-    ".xml",
-    ".html",
-    ".ini",
-    ".css",
-    ".toml",
-    ".md",
-    ".ini",
-    ".conf",
-    ".go",
-    ".cfg",
-    ".java",
-    ".c",
-    ".php",
-    ".swift",
-    ".vb",
-    ".xhtml",
-    ".rss",
-    ".css",
-    ".asp",
-    ".js",
-    ".ts",
-    ".cs",
-    ".c++",
-    ".cc",
-    ".ps1",
-    ".bat",
-    ".batch",
-    ".shell",
-]
 
 
 class Embedding(BaseModel):
     text: str
     embedding: List[float]
+    source_model: str = "text-embedding-ada-002"
 
     class Config:
         json_loads = orjson.loads
@@ -116,10 +47,10 @@ class GuildSettings(BaseModel):
     channel_id: int = 0
     api_key: str = ""
     endswith_questionmark: bool = False
+    min_length: int = 7
     max_retention: int = 0
     max_retention_time: int = 1800
     max_tokens: int = 4000
-    min_length: int = 7
     mention: bool = False
     enabled: bool = True
     model: str = "gpt-3.5-turbo"
@@ -202,15 +133,17 @@ class Conversation(BaseModel):
         json_loads = orjson.loads
         json_dumps = orjson.dumps
 
-    def token_count(self) -> int:
-        return num_tokens_from_string("".join(message["content"] for message in self.messages))
+    def token_count(self, model: str) -> int:
+        return num_tokens_from_string(
+            "".join(message["content"] for message in self.messages), model
+        )
 
     def function_count(self) -> int:
         if not self.messages:
             return 0
         return sum(i["role"] == "function" for i in self.messages)
 
-    def user_token_count(self, message: str = "") -> int:
+    def user_token_count(self, model: str, message: str = "") -> int:
         if not self.messages and not message:
             return 0
         content = [m["content"] for m in self.messages]
@@ -218,11 +151,13 @@ class Conversation(BaseModel):
         messages += message
         if not messages:
             return 0
-        return num_tokens_from_string(messages)
+        return num_tokens_from_string(messages, model)
 
     def conversation_token_count(self, conf: GuildSettings, message: str = "") -> int:
         initial = conf.system_prompt + conf.prompt + (message if isinstance(message, str) else "")
-        return num_tokens_from_string(initial) + self.user_token_count(message)
+        return num_tokens_from_string(initial, conf.model) + self.user_token_count(
+            conf.model, message
+        )
 
     def is_expired(self, conf: GuildSettings, member: Optional[discord.Member] = None):
         if not conf.get_user_max_time(member):
@@ -285,6 +220,9 @@ class DB(BaseModel):
     conversations: dict[str, Conversation] = {}
     persistent_conversations: bool = False
     functions: Dict[str, CustomFunction] = {}
+    self_hosted: bool = True
+    low_mem: bool = True
+    local_model: str = "distilbert-base-uncased-distilled-squad"
 
     class Config:
         json_loads = orjson.loads

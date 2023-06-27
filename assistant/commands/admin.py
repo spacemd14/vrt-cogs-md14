@@ -28,13 +28,13 @@ from redbot.core.utils.chat_formatting import (
 )
 
 from ..abc import MixinMeta
+from ..common.constants import CHAT, COMPLETION, SELF_HOSTED, Embedding
 from ..common.utils import (
     function_list_tokens,
     get_attachments,
     num_tokens_from_string,
     request_embedding,
 )
-from ..models import CHAT, COMPLETION, Embedding
 from ..views import CodeMenu, EmbeddingMenu, SetAPI
 
 log = logging.getLogger("red.vrt.assistant.admin")
@@ -62,10 +62,10 @@ class Admin(MixinMeta):
         """
         conf = self.db.get_conf(ctx.guild)
         channel = f"<#{conf.channel_id}>" if conf.channel_id else "Not Set"
-        system_tokens = num_tokens_from_string(conf.system_prompt)
-        prompt_tokens = num_tokens_from_string(conf.prompt)
+        system_tokens = num_tokens_from_string(conf.system_prompt, conf.model)
+        prompt_tokens = num_tokens_from_string(conf.prompt, conf.model)
         func_list, _ = self.db.prep_functions(self.bot, conf, self.registry)
-        func_tokens = function_list_tokens(func_list)
+        func_tokens = function_list_tokens(func_list, conf.model)
         func_count = len(func_list)
 
         desc = (
@@ -242,11 +242,15 @@ class Admin(MixinMeta):
         msg = await ctx.send(embed=embed, view=view)
         await view.wait()
         key = view.key.strip()
-        if not key:
-            return await msg.edit(content="No key was entered!", embed=None, view=None)
         conf = self.db.get_conf(ctx.guild)
+        if not key and not conf.api_key:
+            await msg.edit(content="No API key was entered!", embed=None, view=None)
+        elif not key and conf.api_key:
+            await msg.edit(content="OpenAI key has been removed!", embed=None, view=None)
+        else:
+            await msg.edit(content="OpenAI key has been set!", embed=None, view=None)
+
         conf.api_key = key
-        await msg.edit(content="OpenAI key has been set!", embed=None, view=None)
         await self.save_conf()
 
     @assistant.command(name="timezone")
@@ -277,6 +281,13 @@ class Admin(MixinMeta):
             self.db.persistent_conversations = True
             await ctx.send("Persistent conversations have been **Enabled**")
         await self.save_conf()
+
+    @assistant.command(name="persist")
+    @commands.is_owner()
+    async def toggle_self_hosted_model(self, ctx: commands.Context):
+        """Toggle the self hosted model"""
+        if self.db.self_hosted:
+            self.tokenizer = None
 
     @assistant.command(name="prompt", aliases=["pre"])
     async def set_initial_prompt(self, ctx: commands.Context, *, prompt: str = ""):
@@ -325,8 +336,8 @@ class Admin(MixinMeta):
 
         conf = self.db.get_conf(ctx.guild)
 
-        ptokens = num_tokens_from_string(prompt)
-        stokens = num_tokens_from_string(conf.system_prompt)
+        ptokens = num_tokens_from_string(prompt, conf.model)
+        stokens = num_tokens_from_string(conf.system_prompt, conf.model)
         combined = ptokens + stokens
         max_tokens = round(conf.max_tokens * 0.9)
         if combined >= max_tokens:
@@ -403,8 +414,8 @@ class Admin(MixinMeta):
 
         conf = self.db.get_conf(ctx.guild)
 
-        ptokens = num_tokens_from_string(conf.prompt)
-        stokens = num_tokens_from_string(system_prompt)
+        ptokens = num_tokens_from_string(conf.prompt, conf.model)
+        stokens = num_tokens_from_string(system_prompt, conf.model)
         combined = ptokens + stokens
         max_tokens = round(conf.max_tokens * 0.9)
         if combined >= max_tokens:
@@ -630,7 +641,7 @@ class Admin(MixinMeta):
     @assistant.command(name="model")
     async def set_model(self, ctx: commands.Context, model: str = None):
         """
-        Set the GPT model to use
+        Set the LLM model to use
 
         Valid models and their context info:
         - Model-Name: MaxTokens, ModelType
@@ -645,29 +656,41 @@ class Admin(MixinMeta):
         - text-babbage-001: 2049, completion
         - text-ada-001: 2049, completion
 
+        Self-Hosted:
+        - distilbert-base-uncased-distilled-squad: 2000, QA completion
+        *This model is only available if bot owner has self-hosting enabled*
+
         Other sub-models are also included
         """
-        valid = humanize_list(CHAT + COMPLETION)
+        valid_raw = CHAT + COMPLETION
+        valid = (
+            f"**Chat**\n{box(humanize_list(CHAT))}\n"
+            f"**Completion**\n{box(humanize_list(COMPLETION))}\n"
+        )
+        if self.db.self_hosted:
+            valid_raw += SELF_HOSTED
+            valid += f"**Self-Hosted (QA Only)**\n{box(humanize_list(SELF_HOSTED))}"
+
         if not model:
-            return await ctx.send(f"Valid models are `{valid}`")
+            return await ctx.send(f"Valid models are:\n{valid}")
         model = model.lower().strip()
         conf = self.db.get_conf(ctx.guild)
-        if not conf.api_key:
+        if not conf.api_key and not self.db.self_hosted:
             return await ctx.send(
                 f"You must set an API key first with `{ctx.prefix}assist openaikey`"
             )
-        try:
-            await openai.Model.aretrieve(model, api_key=conf.api_key)
-        except openai.InvalidRequestError:
-            return await ctx.send("This model is not available for the API key provided!")
 
-        if model not in CHAT + COMPLETION:
-            return await ctx.send(
-                f"Assistant does not support this model yet! Valid model types are `{valid}`"
-            )
+        if conf.api_key and model not in SELF_HOSTED:
+            try:
+                await openai.Model.aretrieve(model, api_key=conf.api_key)
+            except openai.InvalidRequestError:
+                return await ctx.send("This model is not available for the API key provided!")
+
+        if model not in valid_raw:
+            return await ctx.send(f"Invalid model type! Available model types are: {valid}")
 
         conf.model = model
-        await ctx.send(f"The {model} model will now be used")
+        await ctx.send(f"The **{model}** model will now be used")
         await self.save_conf()
 
     @assistant.command(name="resetembeddings")
