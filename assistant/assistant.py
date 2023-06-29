@@ -40,6 +40,17 @@ class Assistant(
     - **[p]chat**: talk with the assistant
     - **[p]convostats**: view a user's token usage/conversation message count for the channel
     - **[p]clearconvo**: reset your conversation with the assistant in the channel
+
+    **Support for Local Models**
+
+    **QA/Tokenizing Model**: `deepset/roberta-base-squad2`
+    - Download size: 2.5GB
+    - RAM usage: around 750MB-1.2GB
+    **Embedding Model**: `all-MiniLM-L12-v2`.
+    - Download size: 120MB
+    - RAM usage: 650-750MB
+
+    *The local model can only be used as Q&A, it doesn't support any message retention or memory*
     """
 
     __author__ = "Vertyco#0117"

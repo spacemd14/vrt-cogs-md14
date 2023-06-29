@@ -39,8 +39,7 @@
     "rapidfuzz",
     "pytz",
     "transformers",
-    "sentence-transformers",
-    "torch"
+    "sentence-transformers"
   ],
   "short": "Another Chat GPT Cog",
   "tags": [

@@ -358,7 +358,7 @@ class Admin(MixinMeta):
                 prompt = (await attachments[0].read()).decode()
             except Exception as e:
                 await ctx.send(
-                    f"Failed to read `{attachments[0].filename}`, bot owner can use `{ctx.prefix}traceback` for more information"
+                    f"Failed to read `{attachments[0].filename}`, bot owner can use `{ctx.clean_prefix}traceback` for more information"
                 )
                 log.error("Failed to parse initial prompt", exc_info=e)
                 self.bot._last_exception = traceback.format_exc()
@@ -385,7 +385,7 @@ class Admin(MixinMeta):
             await ctx.send(
                 (
                     "Please include an initial prompt or .txt file!\n"
-                    f"Use `{ctx.prefix}help assistant prompt` to view details for this command"
+                    f"Use `{ctx.clean_prefix}help assistant prompt` to view details for this command"
                 )
             )
         elif prompt and conf.prompt:
@@ -436,7 +436,7 @@ class Admin(MixinMeta):
                 system_prompt = (await attachments[0].read()).decode()
             except Exception as e:
                 await ctx.send(
-                    f"Failed to read `{attachments[0].filename}`, bot owner can use `{ctx.prefix}traceback` for more information"
+                    f"Failed to read `{attachments[0].filename}`, bot owner can use `{ctx.clean_prefix}traceback` for more information"
                 )
                 log.error("Failed to parse initial prompt", exc_info=e)
                 self.bot._last_exception = traceback.format_exc()
@@ -468,7 +468,7 @@ class Admin(MixinMeta):
             await ctx.send(
                 (
                     "Please include a system prompt or .txt file!\n"
-                    f"Use `{ctx.prefix}help assistant system` to view details for this command"
+                    f"Use `{ctx.clean_prefix}help assistant system` to view details for this command"
                 )
             )
         elif system_prompt and conf.system_prompt:
@@ -794,7 +794,7 @@ class Admin(MixinMeta):
         conf = self.db.get_conf(ctx.guild)
         if not conf.api_key and self.local_llm is None:
             return await ctx.send(
-                f"You must set an API key first with `{ctx.prefix}assist openaikey`"
+                f"You must set an API key first with `{ctx.clean_prefix}assist openaikey`"
             )
 
         if conf.api_key and model not in SELF_HOSTED:
@@ -1016,13 +1016,13 @@ class Admin(MixinMeta):
             if conf.api_key:
                 err += (
                     f"\nIt appears you have API keys set though, if you'd like to switch to the OpenAI embeddings, "
-                    f"use the `{ctx.prefix}assist localembedder` command."
+                    f"use the `{ctx.clean_prefix}assist localembedder` command."
                 )
             return await ctx.send(err)
         if not conf.use_local_embedder and not conf.api_key:
-            err = f"No API keys set! use `{ctx.prefix}assistant openaikey` to set them."
+            err = f"No API keys set! use `{ctx.clean_prefix}assistant openaikey` to set them."
             if self.local_llm is not None:
-                err += f"\nTo use the local embedding model instead, use the `{ctx.prefix}assist localembedder` command."
+                err += f"\nTo use the local embedding model instead, use the `{ctx.clean_prefix}assist localembedder` command."
             return await ctx.send(err)
 
         imported = 0
@@ -1210,13 +1210,13 @@ class Admin(MixinMeta):
             if conf.api_key:
                 err += (
                     f"\nIt appears you have API keys set though, if you'd like to switch to the OpenAI embeddings, "
-                    f"use the `{ctx.prefix}assist localembedder` command."
+                    f"use the `{ctx.clean_prefix}assist localembedder` command."
                 )
             return await ctx.send(err)
         if not conf.use_local_embedder and not conf.api_key:
-            err = f"No API keys set! use `{ctx.prefix}assistant openaikey` to set them."
+            err = f"No API keys set! use `{ctx.clean_prefix}assistant openaikey` to set them."
             if self.local_llm is not None:
-                err += f"\nTo use the local embedding model instead, use the `{ctx.prefix}assist localembedder` command."
+                err += f"\nTo use the local embedding model instead, use the `{ctx.clean_prefix}assist localembedder` command."
             return await ctx.send(err)
 
         view = EmbeddingMenu(
@@ -1373,7 +1373,7 @@ class Admin(MixinMeta):
         conf = self.db.get_conf(ctx.guild)
         if not conf.api_key:
             return await ctx.send(
-                f"You must set an API key first with `{ctx.prefix}assist openaikey`"
+                f"You must set an API key first with `{ctx.clean_prefix}assist openaikey`"
             )
         try:
             await openai.Model.aretrieve(model, api_key=conf.api_key)
