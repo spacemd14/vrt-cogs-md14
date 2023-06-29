@@ -26,59 +26,52 @@ from tenacity import (
 
 from ..abc import MixinMeta
 from .constants import MODELS, SELF_HOSTED, SUPPORTS_FUNCTIONS
-from .models import GuildSettings
+from .models import Conversation, GuildSettings
 
 log = logging.getLogger("red.vrt.assistant.api")
 
 
 class API(MixinMeta):
+    async def request_embedding(self, text: str, conf: GuildSettings) -> List[float]:
+        if conf.use_local_embedder or not conf.api_key:
+            log.debug("Local embed requested")
+            embeddings = await self._local_embed(text)
+            log.debug(f"Embed length: {len(embeddings)}")
+            return embeddings.tolist()
+        return await self._openai_embed(text, conf)
+
+    @cached(ttl=1800)
+    async def _local_embed(self, text: str) -> List[float]:
+        return await asyncio.to_thread(self.local_llm.embedder.encode, text)
+
     @retry(
         retry=retry_if_exception_type(
             Union[Timeout, APIConnectionError, RateLimitError, ServiceUnavailableError]
         ),
         wait=wait_random_exponential(min=1, max=5),
-        stop=stop_after_delay(120),
+        stop=stop_after_delay(15),
         reraise=True,
     )
     @cached(ttl=1800)
-    async def request_embedding(self, text: str, conf: GuildSettings) -> List[float]:
+    async def _openai_embed(self, text: str, conf: GuildSettings) -> List[float]:
         response = await openai.Embedding.acreate(
             input=text, model="text-embedding-ada-002", api_key=conf.api_key, timeout=30
         )
         return response["data"][0]["embedding"]
 
     @retry(
-        retry=retry_if_exception_type(Exception),
-        wait=wait_random_exponential(min=1, max=5),
-        stop=stop_after_delay(120),
-        reraise=True,
-    )
-    @cached(ttl=1800)
-    async def request_local_embedding(self, text: str, conf: GuildSettings) -> List[float]:
-        def _local():
-            inputs = self.local_llm.tokenizer.encode_plus(text, return_tensors="pt")
-            # Get the model's output
-            outputs = self.local_llm.model(**inputs)
-            # Extract the embeddings (last hidden state)
-            embeddings = outputs.last_hidden_state
-            # Convert the tensor to a NumPy array and then to a Python list
-            return embeddings.squeeze().detach().numpy().tolist()
-
-        return await asyncio.to_thread(_local)
-
-    @retry(
         retry=retry_if_exception_type(
             Union[Timeout, APIConnectionError, RateLimitError, APIError, ServiceUnavailableError]
         ),
         wait=wait_random_exponential(min=1, max=5),
-        stop=stop_after_delay(120),
+        stop=stop_after_delay(60),
         reraise=True,
     )
     @cached(ttl=30)
     async def request_chat_response(
-        messages: List[dict], conf: GuildSettings, functions: Optional[List[dict]] = []
+        self, messages: List[dict], conf: GuildSettings, functions: List[dict] = []
     ) -> dict:
-        if VERSION >= "0.27.6" and conf.model in SUPPORTS_FUNCTIONS:
+        if functions and VERSION >= "0.27.6" and conf.model in SUPPORTS_FUNCTIONS:
             response = await openai.ChatCompletion.acreate(
                 model=conf.model,
                 messages=messages,
@@ -102,37 +95,80 @@ class API(MixinMeta):
             Union[Timeout, APIConnectionError, RateLimitError, APIError, ServiceUnavailableError]
         ),
         wait=wait_random_exponential(min=1, max=5),
-        stop=stop_after_delay(120),
+        stop=stop_after_delay(60),
         reraise=True,
     )
     @cached(ttl=30)
-    async def request_completion_response(self, prompt: str, conf: GuildSettings) -> str:
+    async def request_completion_response(
+        self, prompt: str, conf: GuildSettings, max_response_tokens: int
+    ) -> str:
         response = await openai.Completion.acreate(
             model=conf.model,
             prompt=prompt,
             temperature=conf.temperature,
             api_key=conf.api_key,
-            max_tokens=conf.max_tokens,
+            max_tokens=max_response_tokens,
         )
         return response["choices"][0]["text"]
 
-    @retry(
-        retry=retry_if_exception_type(Exception),
-        wait=wait_random_exponential(min=1, max=5),
-        stop=stop_after_delay(120),
-        reraise=True,
-    )
-    @cached(ttl=30)
-    async def request_local_response(self, prompt: str, context: str) -> str:
+    async def request_local_response(
+        self, prompt: str, context: str, min_confidence: float
+    ) -> str:
         def _run():
-            result = self.local_llm(question=prompt, context=context)
-            return result["answer"] if result else ""
+            result = self.local_llm.pipe(question=prompt, context=context)
+            if not result:
+                return ""
 
+            log.debug(f"Response: {result}")
+            score = result.get("score", 0)
+            if score < min_confidence:
+                return ""
+            return result.get("answer", "")
+
+        if not context:
+            return ""
         return await asyncio.to_thread(_run)
 
+    # -------------------------------------------------------
+    # -------------------------------------------------------
     # ----------------------- HELPERS -----------------------
-    def get_max_tokens(self, conf: GuildSettings, member: Optional[discord.Member]) -> int:
-        return min(conf.get_user_max_tokens(member), MODELS[conf.model] - 100)
+    # -------------------------------------------------------
+    # -------------------------------------------------------
+    def get_llm_type(self, conf: GuildSettings, embeds: bool = False) -> str:
+        check = conf.use_local_embedder if embeds else conf.use_local_llm
+        if conf.api_key and not check:
+            return "api"
+        elif self.local_llm is not None:
+            return "local"
+        else:
+            # Either api model is selected but no api key, or self hosted is selected but its not enabled
+            if not conf.api_key:
+                log.info("No API key!")
+            elif self.local_llm is None:
+                log.info("Local LLM not running!")
+            return "none"
+
+    async def sync_embeddings(self, conf: GuildSettings) -> bool:
+        synced = False
+
+        for name, em in conf.embeddings.items():
+            if conf.use_local_embedder and em.openai_tokens:
+                log.debug(f"Converting OpenAI embedding '{name}' to Local version")
+                em.embedding = await self.request_embedding(em.text, conf)
+                em.openai_tokens = False
+                synced = True
+            elif not conf.use_local_embedder and not em.openai_tokens:
+                log.debug(f"Converting Local embedding '{name}' to OpenAI version")
+                em.embedding = await self.request_embedding(em.text, conf)
+                em.openai_tokens = True
+                synced = True
+
+        if synced:
+            await self.save_conf()
+        return synced
+
+    def get_max_tokens(self, conf: GuildSettings, user: Optional[discord.Member]) -> int:
+        return min(conf.get_user_max_tokens(user), MODELS[conf.get_user_model(user)] - 96)
 
     async def cut_text_by_tokens(self, text: str, conf: GuildSettings, max_tokens: int) -> str:
         tokens = await self.get_tokens(text, conf)
@@ -145,10 +181,10 @@ class API(MixinMeta):
         """Get token list from text"""
 
         def _run():
-            if conf.model in SELF_HOSTED:
-                return self.local_llm.tokenizer.tokenize(text)
+            if conf.model in SELF_HOSTED and self.local_llm is not None:
+                return self.local_llm.pipe.tokenizer.encode(text)
             else:
-                return self.openai_encoder.encode(text)
+                return self.openai_tokenizer.encode(text)
 
         if not text:
             return []
@@ -158,15 +194,40 @@ class API(MixinMeta):
         """Get text from token list"""
 
         def _run():
-            if conf.model in SELF_HOSTED:
-                return self.local_llm.tokenizer.convert_tokens_to_string(tokens)
+            if conf.model in SELF_HOSTED and self.local_llm is not None:
+                return self.local_llm.pipe.tokenizer.convert_tokens_to_string(tokens)
             else:
-                return self.openai_encoder.decode(tokens)
+                return self.openai_tokenizer.decode(tokens)
 
         return await asyncio.to_thread(_run)
 
-    def degrade_conversation(
-        self, messages: List[dict], function_list: List[dict], conf: GuildSettings
+    async def convo_token_count(self, conf: GuildSettings, convo: Conversation) -> int:
+        """Fetch token count of stored messages"""
+        return sum([(await self.get_token_count(i["content"], conf)) for i in convo.messages])
+
+    async def prompt_token_count(self, conf: GuildSettings) -> int:
+        """Fetch token count of system and initial prompts"""
+        return (await self.get_token_count(conf.prompt, conf)) + (
+            await self.get_token_count(conf.system_prompt, conf)
+        )
+
+    async def function_token_count(self, conf: GuildSettings, functions: List[dict]) -> int:
+        if not functions:
+            return 0
+        dumped = "".join(orjson.dumps(i) for i in functions)
+        return await self.get_token_count(dumped, conf)
+
+    # -------------------------------------------------------
+    # -------------------------------------------------------
+    # -------------------- FORMATTING -----------------------
+    # -------------------------------------------------------
+    # -------------------------------------------------------
+    async def degrade_conversation(
+        self,
+        messages: List[dict],
+        function_list: List[dict],
+        conf: GuildSettings,
+        user: Optional[discord.Member],
     ) -> Tuple[List[dict], List[dict], bool]:
         """Iteratively degrade a conversation payload, prioritizing more recent messages and critical context
 
@@ -179,13 +240,17 @@ class API(MixinMeta):
             Tuple[List[dict], List[dict], bool]: updated messages list, function list, and whether the conversation was degraded
         """
         # Calculate the initial total token count
-        total_tokens = sum(self.get_token_count(msg["content"], conf) for msg in messages)
-        total_tokens += sum(
-            self.get_token_count(orjson.dumps(func), conf) for func in function_list
-        )
+        total_tokens = 0
+        for message in messages:
+            count = await self.get_token_count(message["content"], conf)
+            total_tokens += count
+
+        for function in function_list:
+            count = await self.get_token_count(orjson.dumps(function), conf)
+            total_tokens += count
 
         # Check if the total token count is already under the max token limit
-        max_tokens = min(conf.max_tokens - 100, MODELS[conf.model])
+        max_tokens = self.get_max_tokens(conf, user)
         if total_tokens <= max_tokens:
             return messages, function_list, False
 
@@ -201,7 +266,7 @@ class API(MixinMeta):
         # Degrade function_list first
         while total_tokens > max_tokens and len(function_list) > 0:
             popped = function_list.pop(0)
-            total_tokens -= self.get_token_count(orjson.dumps(popped), conf)
+            total_tokens -= await self.get_token_count(orjson.dumps(popped), conf)
             if total_tokens <= max_tokens:
                 return messages, function_list, True
 
@@ -235,13 +300,13 @@ class API(MixinMeta):
 
             degraded_content = _degrade_message(messages[i]["content"])
             if degraded_content:
-                token_diff = self.get_token_count(
-                    messages[i]["content"], conf
-                ) - self.get_token_count(degraded_content, conf)
+                token_diff = (await self.get_token_count(messages[i]["content"], conf)) - (
+                    await self.get_token_count(degraded_content, conf)
+                )
                 messages[i]["content"] = degraded_content
                 total_tokens -= token_diff
             else:
-                total_tokens -= self.get_token_count(messages[i]["content"], conf)
+                total_tokens -= await self.get_token_count(messages[i]["content"], conf)
                 messages.pop(i)
 
             if total_tokens <= max_tokens:
@@ -255,19 +320,19 @@ class API(MixinMeta):
             while total_tokens > max_tokens:
                 degraded_content = _degrade_message(messages[i]["content"])
                 if degraded_content:
-                    token_diff = self.get_token_count(
-                        messages[i]["content"], conf
-                    ) - self.get_token_count(degraded_content, conf)
+                    token_diff = (await self.get_token_count(messages[i]["content"], conf)) - (
+                        await self.get_token_count(degraded_content, conf)
+                    )
                     messages[i]["content"] = degraded_content
                     total_tokens -= token_diff
                 else:
-                    total_tokens -= self.get_token_count(messages[i]["content"], conf)
+                    total_tokens -= await self.get_token_count(messages[i]["content"], conf)
                     messages.pop(i)
                     break
 
         return messages, function_list, True
 
-    async def token_pagify(self, text: str, conf: GuildSettings):
+    async def token_pagify(self, text: str, conf: GuildSettings) -> List[str]:
         """Pagify a long string by tokens rather than characters"""
         token_chunks = []
         tokens = await self.get_tokens(text, conf)
@@ -290,6 +355,11 @@ class API(MixinMeta):
 
         return text_chunks
 
+    # -------------------------------------------------------
+    # -------------------------------------------------------
+    # ----------------------- EMBEDS ------------------------
+    # -------------------------------------------------------
+    # -------------------------------------------------------
     async def get_function_menu_embeds(self, user: discord.Member) -> List[discord.Embed]:
         func_dump = {k: v.dict() for k, v in self.db.functions.items()}
         registry = {"Assistant": func_dump}
@@ -374,12 +444,17 @@ class API(MixinMeta):
             embed.set_footer(text=f"Page {page + 1}/{pages}")
             num = 0
             for i in range(start, stop):
-                em = embeddings[i]
-                text = em[1].text
-                tokens = await self.get_token_count(text, conf)
-                val = f"`Tokens: `{tokens}\n```\n{text[:30]}...\n```"
+                name, embedding = embeddings[i]
+                tokens = await self.get_token_count(embedding.text, conf)
+                encoder = "OpenAI" if embedding.openai_tokens else "Local LLM"
+                text = (
+                    box(f"{embedding.text[:30].strip()}...")
+                    if len(embedding.text) > 33
+                    else box(embedding.text.strip())
+                )
+                val = f"`Tokens:     `{tokens}\n" f"`Encoded by: `{encoder}\n" f"{text}"
                 embed.add_field(
-                    name=f"➣ {em[0]}" if place == num else em[0],
+                    name=f"➣ {name}" if place == num else name,
                     value=val,
                     inline=False,
                 )

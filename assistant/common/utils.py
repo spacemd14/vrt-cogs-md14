@@ -1,14 +1,16 @@
 import asyncio
 import logging
 import re
-from typing import Callable, List, Optional, Tuple
+import sys
+from datetime import datetime
+from typing import List, Optional, Tuple, Union
 
 import discord
-from redbot.core import commands
+from redbot.core import commands, version_info
+from redbot.core.bot import Red
+from redbot.core.utils.chat_formatting import humanize_list
 
 log = logging.getLogger("red.vrt.assistant.utils")
-# encoding = tiktoken.get_encoding("cl100k_base")
-# encoding_local = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
 
 
 def get_attachments(message: discord.Message) -> List[discord.Attachment]:
@@ -94,11 +96,6 @@ def code_string_valid(code: str) -> bool:
         return False
 
 
-def compile_function(function_name: str, code: str) -> Callable:
-    exec(code, globals())
-    return globals()[function_name]
-
-
 def json_schema_invalid(schema: dict) -> str:
     # String will be empty if function is good
     missing = ""
@@ -127,3 +124,42 @@ def compile_messages(messages: List[dict]) -> str:
         text += f"{role}: {content}\n"
     text += "\n"
     return text
+
+
+def get_params(
+    bot: Red,
+    guild: discord.Guild,
+    now: datetime,
+    author: Optional[discord.Member],
+    channel: Optional[Union[discord.TextChannel, discord.Thread, discord.ForumChannel]],
+    extras: dict,
+) -> dict:
+    roles = [role for role in author.roles if "everyone" not in role.name] if author else []
+    display_name = author.display_name if author else ""
+    return {
+        **extras,
+        "botname": bot.user.name,
+        "timestamp": f"<t:{round(now.timestamp())}:F>",
+        "day": now.strftime("%A"),
+        "date": now.strftime("%B %d, %Y"),
+        "time": now.strftime("%I:%M %p"),
+        "timetz": now.strftime("%I:%M %p %Z"),
+        "members": guild.member_count,
+        "username": author.name if author else "",
+        "user": author.name if author else "",
+        "displayname": display_name,
+        "datetime": str(datetime.now()),
+        "roles": humanize_list([role.name for role in roles]),
+        "rolementions": humanize_list([role.mention for role in roles]),
+        "avatar": author.display_avatar.url if author else "",
+        "owner": guild.owner.name,
+        "servercreated": f"<t:{round(guild.created_at.timestamp())}:F>",
+        "server": guild.name,
+        "py": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "dpy": discord.__version__,
+        "red": str(version_info),
+        "cogs": humanize_list([bot.get_cog(cog).qualified_name for cog in bot.cogs]),
+        "channelname": channel.name if channel else "",
+        "channelmention": channel.mention if channel else "",
+        "topic": channel.topic if channel and isinstance(channel, discord.TextChannel) else "",
+    }

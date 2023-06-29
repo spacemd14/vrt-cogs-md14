@@ -34,7 +34,15 @@ COMPLETION = [
     "text-babbage-001",
     "text-ada-001",
 ]
-SELF_HOSTED = ["distilbert-base-uncased-distilled-squad"]
+SELF_HOSTED = [
+    "distilbert-base-uncased-distilled-squad",  # 1.8GB download, 500MB RAM
+    "deepset/roberta-base-squad2",  # 2.5GB download, 730MB RAM (RECOMMENDED)
+]
+LOCAL_EMBED_MODELS = [
+    "all-mpnet-base-v2",  # 420MB download, 750MB RAM
+    "all-MiniLM-L12-v2",  # 120MB download, 650MB RAM (RECOMMENDED)
+    "all-MiniLM-L6-v2",  # 80MB download, 350MB RAM
+]
 READ_EXTENSIONS = [
     ".txt",
     ".py",
