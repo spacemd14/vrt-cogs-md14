@@ -23,7 +23,6 @@
   "required_cogs": {},
   "requirements": [
     "json5",
-    "matplotlib",
     "requests",
     "pillow",
     "validators",
